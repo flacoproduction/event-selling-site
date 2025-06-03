@@ -1,0 +1,829 @@
+// EventHub Backend Server
+// Run with: node server.js
+// Install dependencies: npm install express cors body-parser bcryptjs jsonwebtoken express-rate-limit helmet
+
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const fs = require('fs').promises;
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+
+// Middleware
+app.use(helmet());
+app.use(cors({
+    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    credentials: true
+}));
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: { error: 'Too many requests, please try again later.' }
+});
+app.use('/api/', limiter);
+
+// In-memory database (replace with real database in production)
+let database = {
+    events: [
+        {
+            id: 1,
+            name: "The Midnight Symphony",
+            date: "2025-06-15",
+            venue: "Madison Square Garden",
+            location: "New York, NY",
+            category: "concerts",
+            price: 45,
+            description: "An enchanting evening of classical music under the stars",
+            capacity: 20000,
+            ticketsSold: 1250,
+            status: "Active",
+            image: "🎵 Concert",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            name: "Lakers vs Warriors",
+            date: "2025-06-20",
+            venue: "Crypto.com Arena",
+            location: "Los Angeles, CA",
+            category: "sports",
+            price: 85,
+            description: "Epic NBA showdown between two legendary teams",
+            capacity: 18000,
+            ticketsSold: 15600,
+            status: "Active",
+            image: "🏀 Basketball",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        },
+        {
+            id: 3,
+            name: "Hamilton Musical",
+            date: "2025-06-25",
+            venue: "Broadway Theater",
+            location: "New York, NY",
+            category: "theater",
+            price: 120,
+            description: "The award-winning musical that tells America's story",
+            capacity: 1500,
+            ticketsSold: 1450,
+            status: "Active",
+            image: "🎭 Theater",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        },
+        {
+            id: 4,
+            name: "Comedy Night Live",
+            date: "2025-06-18",
+            venue: "Comedy Club",
+            location: "Chicago, IL",
+            category: "comedy",
+            price: 35,
+            description: "Stand-up comedy with the best comedians in town",
+            capacity: 500,
+            ticketsSold: 420,
+            status: "Active",
+            image: "😂 Comedy",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        }
+    ],
+    users: [
+        {
+            id: 1,
+            name: "John Smith",
+            email: "john@email.com",
+            phone: "555-0123",
+            password: "$2a$10$rOzJpZhJlDwHX.GHzG7JH.8cP9VmC4dJKlQRQP8jGvM4Ym5xGjB6G", // "password123"
+            role: "customer",
+            joinDate: "2024-01-15",
+            ticketsPurchased: 12,
+            totalSpent: 540,
+            status: "Active",
+            lastLogin: new Date().toISOString(),
+            createdAt: "2024-01-15T00:00:00Z",
+            updatedAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            name: "Sarah Johnson",
+            email: "sarah@email.com",
+            phone: "555-0124",
+            password: "$2a$10$rOzJpZhJlDwHX.GHzG7JH.8cP9VmC4dJKlQRQP8jGvM4Ym5xGjB6G",
+            role: "customer",
+            joinDate: "2024-02-20",
+            ticketsPurchased: 8,
+            totalSpent: 680,
+            status: "Active",
+            lastLogin: new Date().toISOString(),
+            createdAt: "2024-02-20T00:00:00Z",
+            updatedAt: new Date().toISOString()
+        },
+        {
+            id: 3,
+            name: "Admin User",
+            email: "admin@eventhub.com",
+            phone: "555-0001",
+            password: "$2a$10$rOzJpZhJlDwHX.GHzG7JH.8cP9VmC4dJKlQRQP8jGvM4Ym5xGjB6G", // "admin123"
+            role: "admin",
+            joinDate: "2024-01-01",
+            ticketsPurchased: 0,
+            totalSpent: 0,
+            status: "Active",
+            lastLogin: new Date().toISOString(),
+            createdAt: "2024-01-01T00:00:00Z",
+            updatedAt: new Date().toISOString()
+        }
+    ],
+    bookings: [
+        {
+            id: "B001",
+            userId: 1,
+            eventId: 1,
+            customerName: "John Smith",
+            customerEmail: "john@email.com",
+            eventName: "The Midnight Symphony",
+            ticketQuantity: 2,
+            ticketType: "general",
+            totalAmount: 90,
+            bookingDate: "2025-05-15T10:30:00Z",
+            status: "Confirmed",
+            paymentStatus: "Paid",
+            paymentMethod: "Credit Card"
+        },
+        {
+            id: "B002",
+            userId: 2,
+            eventId: 2,
+            customerName: "Sarah Johnson",
+            customerEmail: "sarah@email.com",
+            eventName: "Lakers vs Warriors",
+            ticketQuantity: 4,
+            ticketType: "vip",
+            totalAmount: 340,
+            bookingDate: "2025-05-18T14:20:00Z",
+            status: "Confirmed",
+            paymentStatus: "Paid",
+            paymentMethod: "Credit Card"
+        }
+    ],
+    venues: [
+        {
+            id: 1,
+            name: "Madison Square Garden",
+            location: "New York, NY",
+            address: "4 Pennsylvania Plaza, New York, NY 10001",
+            capacity: 20000,
+            eventsHosted: 45,
+            status: "Active",
+            facilities: ["Parking", "Food Court", "VIP Lounges", "Accessible"],
+            contactEmail: "events@msg.com",
+            contactPhone: "212-465-6741"
+        },
+        {
+            id: 2,
+            name: "Crypto.com Arena",
+            location: "Los Angeles, CA",
+            address: "1111 S Figueroa St, Los Angeles, CA 90015",
+            capacity: 18000,
+            eventsHosted: 38,
+            status: "Active",
+            facilities: ["Parking", "Premium Dining", "VIP Suites", "Accessible"],
+            contactEmail: "events@cryptoarena.com",
+            contactPhone: "213-742-7100"
+        }
+    ]
+};
+
+// Helper functions
+const generateId = (array) => {
+    return array.length > 0 ? Math.max(...array.map(item => item.id)) + 1 : 1;
+};
+
+const generateBookingId = () => {
+    return 'B' + String(database.bookings.length + 1).padStart(3, '0');
+};
+
+// Authentication middleware
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'Access token required' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid or expired token' });
+        }
+        req.user = user;
+        next();
+    });
+};
+
+// Admin middleware
+const requireAdmin = (req, res, next) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+    next();
+};
+
+// AUTH ROUTES
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+
+        const user = database.users.find(u => u.email === email);
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const validPassword = await bcrypt.compare(password, user.password);
+        if (!validPassword) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Update last login
+        user.lastLogin = new Date().toISOString();
+
+        const token = jwt.sign(
+            { id: user.id, email: user.email, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.json({
+            message: 'Login successful',
+            token,
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                role: user.role
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error during login' });
+    }
+});
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { name, email, phone, password } = req.body;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({ error: 'Name, email and password are required' });
+        }
+
+        if (database.users.find(u => u.email === email)) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = {
+            id: generateId(database.users),
+            name,
+            email,
+            phone: phone || null,
+            password: hashedPassword,
+            role: 'customer',
+            joinDate: new Date().toISOString().split('T')[0],
+            ticketsPurchased: 0,
+            totalSpent: 0,
+            status: 'Active',
+            lastLogin: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        database.users.push(newUser);
+
+        const token = jwt.sign(
+            { id: newUser.id, email: newUser.email, role: newUser.role },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.status(201).json({
+            message: 'User registered successfully',
+            token,
+            user: {
+                id: newUser.id,
+                name: newUser.name,
+                email: newUser.email,
+                role: newUser.role
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error during registration' });
+    }
+});
+
+// EVENT ROUTES
+
+// Get all events
+app.get('/api/events', (req, res) => {
+    const { category, search, limit, offset } = req.query;
+    let events = [...database.events];
+
+    // Filter by category
+    if (category && category !== 'all') {
+        events = events.filter(event => event.category === category);
+    }
+
+    // Search functionality
+    if (search) {
+        const searchLower = search.toLowerCase();
+        events = events.filter(event =>
+            event.name.toLowerCase().includes(searchLower) ||
+            event.venue.toLowerCase().includes(searchLower) ||
+            event.location.toLowerCase().includes(searchLower) ||
+            event.category.toLowerCase().includes(searchLower)
+        );
+    }
+
+    // Pagination
+    const totalEvents = events.length;
+    if (limit) {
+        const limitNum = parseInt(limit);
+        const offsetNum = parseInt(offset) || 0;
+        events = events.slice(offsetNum, offsetNum + limitNum);
+    }
+
+    res.json({
+        events,
+        total: totalEvents,
+        count: events.length
+    });
+});
+
+// Get single event
+app.get('/api/events/:id', (req, res) => {
+    const event = database.events.find(e => e.id === parseInt(req.params.id));
+    if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+    }
+    res.json(event);
+});
+
+// Create event (Admin only)
+app.post('/api/events', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        const {
+            name, date, venue, location, category, price, description,
+            capacity, image
+        } = req.body;
+
+        if (!name || !date || !venue || !category || !price) {
+            return res.status(400).json({ error: 'Required fields: name, date, venue, category, price' });
+        }
+
+        const newEvent = {
+            id: generateId(database.events),
+            name,
+            date,
+            venue,
+            location: location || '',
+            category,
+            price: parseFloat(price),
+            description: description || '',
+            capacity: parseInt(capacity) || 1000,
+            ticketsSold: 0,
+            status: 'Active',
+            image: image || '🎫 Event',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        database.events.push(newEvent);
+        res.status(201).json({
+            message: 'Event created successfully',
+            event: newEvent
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error creating event' });
+    }
+});
+
+// Update event (Admin only)
+app.put('/api/events/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+        const eventId = parseInt(req.params.id);
+        const eventIndex = database.events.findIndex(e => e.id === eventId);
+
+        if (eventIndex === -1) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+
+        const updatedEvent = {
+            ...database.events[eventIndex],
+            ...req.body,
+            id: eventId, // Prevent ID change
+            updatedAt: new Date().toISOString()
+        };
+
+        // Validate required fields
+        if (!updatedEvent.name || !updatedEvent.date || !updatedEvent.venue || 
+            !updatedEvent.category || !updatedEvent.price) {
+            return res.status(400).json({ error: 'Required fields cannot be empty' });
+        }
+
+        database.events[eventIndex] = updatedEvent;
+        res.json({
+            message: 'Event updated successfully',
+            event: updatedEvent
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error updating event' });
+    }
+});
+
+// Delete event (Admin only)
+app.delete('/api/events/:id', authenticateToken, requireAdmin, (req, res) => {
+    const eventId = parseInt(req.params.id);
+    const eventIndex = database.events.findIndex(e => e.id === eventId);
+
+    if (eventIndex === -1) {
+        return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Check if event has bookings
+    const hasBookings = database.bookings.some(b => b.eventId === eventId);
+    if (hasBookings) {
+        return res.status(400).json({ 
+            error: 'Cannot delete event with existing bookings. Please cancel all bookings first.' 
+        });
+    }
+
+    database.events.splice(eventIndex, 1);
+    res.json({ message: 'Event deleted successfully' });
+});
+
+// USER ROUTES
+
+// Get all users (Admin only)
+app.get('/api/users', authenticateToken, requireAdmin, (req, res) => {
+    const { search, role, status, limit, offset } = req.query;
+    let users = [...database.users];
+
+    // Remove password from response
+    users = users.map(user => {
+        const { password, ...userWithoutPassword } = user;
+        return userWithoutPassword;
+    });
+
+    // Filter by role
+    if (role) {
+        users = users.filter(user => user.role === role);
+    }
+
+    // Filter by status
+    if (status) {
+        users = users.filter(user => user.status === status);
+    }
+
+    // Search functionality
+    if (search) {
+        const searchLower = search.toLowerCase();
+        users = users.filter(user =>
+            user.name.toLowerCase().includes(searchLower) ||
+            user.email.toLowerCase().includes(searchLower) ||
+            (user.phone && user.phone.includes(search))
+        );
+    }
+
+    // Pagination
+    const totalUsers = users.length;
+    if (limit) {
+        const limitNum = parseInt(limit);
+        const offsetNum = parseInt(offset) || 0;
+        users = users.slice(offsetNum, offsetNum + limitNum);
+    }
+
+    res.json({
+        users,
+        total: totalUsers,
+        count: users.length
+    });
+});
+
+// Get single user (Admin only or own profile)
+app.get('/api/users/:id', authenticateToken, (req, res) => {
+    const userId = parseInt(req.params.id);
+    
+    // Users can only access their own profile unless they're admin
+    if (req.user.role !== 'admin' && req.user.id !== userId) {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const user = database.users.find(u => u.id === userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { password, ...userWithoutPassword } = user;
+    res.json(userWithoutPassword);
+});
+
+// Update user (Admin only or own profile)
+app.put('/api/users/:id', authenticateToken, (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+        
+        // Users can only update their own profile unless they're admin
+        if (req.user.role !== 'admin' && req.user.id !== userId) {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        const userIndex = database.users.findIndex(u => u.id === userId);
+        if (userIndex === -1) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { password, ...updateData } = req.body;
+        
+        // Handle password update separately
+        let hashedPassword = database.users[userIndex].password;
+        if (password) {
+            hashedPassword = bcrypt.hashSync(password, 10);
+        }
+
+        const updatedUser = {
+            ...database.users[userIndex],
+            ...updateData,
+            id: userId, // Prevent ID change
+            password: hashedPassword,
+            updatedAt: new Date().toISOString()
+        };
+
+        // Validate email uniqueness
+        if (updateData.email) {
+            const emailExists = database.users.some(u => u.email === updateData.email && u.id !== userId);
+            if (emailExists) {
+                return res.status(400).json({ error: 'Email already exists' });
+            }
+        }
+
+        database.users[userIndex] = updatedUser;
+        
+        const { password: pwd, ...userResponse } = updatedUser;
+        res.json({
+            message: 'User updated successfully',
+            user: userResponse
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error updating user' });
+    }
+});
+
+// Delete user (Admin only)
+app.delete('/api/users/:id', authenticateToken, requireAdmin, (req, res) => {
+    const userId = parseInt(req.params.id);
+    const userIndex = database.users.findIndex(u => u.id === userId);
+
+    if (userIndex === -1) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Prevent deleting the last admin
+    const user = database.users[userIndex];
+    if (user.role === 'admin') {
+        const adminCount = database.users.filter(u => u.role === 'admin').length;
+        if (adminCount <= 1) {
+            return res.status(400).json({ error: 'Cannot delete the last admin user' });
+        }
+    }
+
+    database.users.splice(userIndex, 1);
+    res.json({ message: 'User deleted successfully' });
+});
+
+// BOOKING ROUTES
+
+// Get all bookings (Admin only)
+app.get('/api/bookings', authenticateToken, requireAdmin, (req, res) => {
+    const { search, status, eventId, userId, limit, offset } = req.query;
+    let bookings = [...database.bookings];
+
+    // Filter by status
+    if (status) {
+        bookings = bookings.filter(booking => booking.status === status);
+    }
+
+    // Filter by event
+    if (eventId) {
+        bookings = bookings.filter(booking => booking.eventId === parseInt(eventId));
+    }
+
+    // Filter by user
+    if (userId) {
+        bookings = bookings.filter(booking => booking.userId === parseInt(userId));
+    }
+
+    // Search functionality
+    if (search) {
+        const searchLower = search.toLowerCase();
+        bookings = bookings.filter(booking =>
+            booking.id.toLowerCase().includes(searchLower) ||
+            booking.customerName.toLowerCase().includes(searchLower) ||
+            booking.eventName.toLowerCase().includes(searchLower)
+        );
+    }
+
+    // Pagination
+    const totalBookings = bookings.length;
+    if (limit) {
+        const limitNum = parseInt(limit);
+        const offsetNum = parseInt(offset) || 0;
+        bookings = bookings.slice(offsetNum, offsetNum + limitNum);
+    }
+
+    res.json({
+        bookings,
+        total: totalBookings,
+        count: bookings.length
+    });
+});
+
+// Get user bookings
+app.get('/api/users/:userId/bookings', authenticateToken, (req, res) => {
+    const userId = parseInt(req.params.userId);
+    
+    // Users can only access their own bookings unless they're admin
+    if (req.user.role !== 'admin' && req.user.id !== userId) {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const userBookings = database.bookings.filter(b => b.userId === userId);
+    res.json({ bookings: userBookings });
+});
+
+// Create booking
+app.post('/api/bookings', authenticateToken, (req, res) => {
+    try {
+        const { eventId, ticketQuantity, ticketType } = req.body;
+
+        if (!eventId || !ticketQuantity || !ticketType) {
+            return res.status(400).json({ error: 'Required fields: eventId, ticketQuantity, ticketType' });
+        }
+
+        const event = database.events.find(e => e.id === parseInt(eventId));
+        if (!event) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+
+        const user = database.users.find(u => u.id === req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Check availability
+        const remainingTickets = event.capacity - event.ticketsSold;
+        if (ticketQuantity > remainingTickets) {
+            return res.status(400).json({ error: 'Not enough tickets available' });
+        }
+
+        // Calculate price based on ticket type
+        const priceMultiplier = {
+            'general': 1,
+            'vip': 3,
+            'premium': 5
+        };
+        const basePrice = event.price;
+        const totalAmount = basePrice * priceMultiplier[ticketType] * ticketQuantity;
+
+        const newBooking = {
+            id: generateBookingId(),
+            userId: user.id,
+            eventId: event.id,
+            customerName: user.name,
+            customerEmail: user.email,
+            eventName: event.name,
+            ticketQuantity: parseInt(ticketQuantity),
+            ticketType,
+            totalAmount,
+            bookingDate: new Date().toISOString(),
+            status: 'Confirmed',
+            paymentStatus: 'Paid',
+            paymentMethod: 'Credit Card'
+        };
+
+        database.bookings.push(newBooking);
+
+        // Update event tickets sold
+        event.ticketsSold += parseInt(ticketQuantity);
+        event.updatedAt = new Date().toISOString();
+
+        // Update user stats
+        user.ticketsPurchased += parseInt(ticketQuantity);
+        user.totalSpent += totalAmount;
+        user.updatedAt = new Date().toISOString();
+
+        res.status(201).json({
+            message: 'Booking created successfully',
+            booking: newBooking
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Server error creating booking' });
+    }
+});
+
+// DASHBOARD ROUTES
+
+// Get dashboard stats (Admin only)
+app.get('/api/dashboard/stats', authenticateToken, requireAdmin, (req, res) => {
+    const totalEvents = database.events.length;
+    const activeEvents = database.events.filter(e => e.status === 'Active').length;
+    const totalUsers = database.users.filter(u => u.role === 'customer').length;
+    const activeUsers = database.users.filter(u => u.status === 'Active' && u.role === 'customer').length;
+    const totalBookings = database.bookings.length;
+    const totalRevenue = database.bookings.reduce((sum, booking) => sum + booking.totalAmount, 0);
+    const totalTicketsSold = database.bookings.reduce((sum, booking) => sum + booking.ticketQuantity, 0);
+
+    res.json({
+        events: {
+            total: totalEvents,
+            active: activeEvents
+        },
+        users: {
+            total: totalUsers,
+            active: activeUsers
+        },
+        bookings: {
+            total: totalBookings
+        },
+        revenue: {
+            total: totalRevenue,
+            average: totalEvents > 0 ? totalRevenue / totalEvents : 0
+        },
+        tickets: {
+            sold: totalTicketsSold
+        }
+    });
+});
+
+// VENUE ROUTES (Basic CRUD)
+
+app.get('/api/venues', (req, res) => {
+    res.json({ venues: database.venues });
+});
+
+app.post('/api/venues', authenticateToken, requireAdmin, (req, res) => {
+    const newVenue = {
+        id: generateId(database.venues),
+        ...req.body,
+        eventsHosted: 0,
+        status: 'Active'
+    };
+    database.venues.push(newVenue);
+    res.status(201).json({ message: 'Venue created successfully', venue: newVenue });
+});
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+    console.error('Server Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+});
+
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({ error: 'Endpoint not found' });
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`🚀 EventHub Backend Server running on port ${PORT}`);
+    console.log(`📊 API Documentation available at http://localhost:${PORT}/api`);
+    console.log(`🔐 Default Admin Login: admin@eventhub.com / admin123`);
+    console.log(`👤 Default User Login: john@email.com / password123`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('🛑 Server shutting down gracefully...');
+    process.exit(0);
+});
+
+module.exports = app;
